@@ -1,0 +1,276 @@
+/**
+ *     attrInspector.mel
+ *     philippe leprince
+ *     Fri Nov 17 18:16:16 GMT 2017
+ */
+
+print ("attrInspector v1.0 - plp@pixar.com");
+
+proc string indentString( string $str )
+{
+    string $result[] = stringToStringArray( $str, "\n");
+    $result[0] = ("\t"+$result[0]);
+    return stringArrayToString( $result, "\n\t");
+}
+
+
+proc string messageAttr( string $attr )
+{
+    string $out[] = `listConnections -d true  -s false -plugs true $attr`;
+    string  $in[] = `listConnections -d false -s true  -plugs true $attr`;
+    return (" in:  "+stringArrayToString( $in, "\n      ")+"\nout:  "+stringArrayToString( $out, "\n      "));
+}
+
+
+proc string matrixAttr( string $attr )
+{
+    string $result,$t;
+    float $tmp[16] = `getAttr $attr`;
+    float $f, $i = 1;
+    for ( $f in $tmp ) {
+        $t = $f;
+        if ( !gmatch( $t, "*.*") ) $t+=".0";
+        if ( !gmatch( $t, "-*") )  $t =" "+$t;
+        while(size($t)<17) $t+=" ";
+        $result += $t;
+        if ( !fmod($i,4) ) $result += "\n";
+        $i++;
+    }
+    return $result;
+}
+
+proc string enumAttr( string $attr )
+{
+    string $token[];
+    tokenize $attr "." $token;
+    int $val = `getAttr $attr`;
+    string $topattr =  $token[1];
+    if ( size( $token ) > 2 )
+    {
+        $topattr = $token[2];
+    }
+    string $enum[] = `attributeQuery -node $token[0] -listEnum $topattr`;
+    string $enumStr[] = stringToStringArray( $enum[0], ":");
+    string $result = ("value:  "+$val+"\n enum:  "+stringArrayToString( $enumStr, "\n        "));
+    return $result;
+}
+
+proc string attrInspectorGetType( string $nodeDotAttr )
+{
+    trace("::: "+$nodeDotAttr);
+    string $tokens[];
+    tokenize $nodeDotAttr "." $tokens;
+
+    string $node = match("^[A-Za-z0-9_]+", $nodeDotAttr);
+    string $attr = substitute(($node+"\."), $nodeDotAttr, "" );
+    string $last = match("[A-Za-z0-9_]+\[*[0-9]*\]*$", $nodeDotAttr);
+
+    string $type= "unknown";
+    if ( !objExists( $nodeDotAttr ) )
+    {
+        trace("::: Doesn't exist :"+$nodeDotAttr);
+        trace("    + return !");
+        return $type;
+    }
+    string $tmp = "";
+
+
+    // try to get the type
+    catchQuiet( $tmp = `getAttr -type $nodeDotAttr` );
+    if ( $tmp == "" &&
+        `attributeQuery -node $node -msg $last` > 0 )
+    {
+        $tmp = "message";
+    }
+
+
+    if ( $tmp != "" ) {
+        $type = $tmp;
+    }
+
+    return $type;
+}
+
+proc string compoundAttr( string $nodeDotAttr )
+{
+    string $node = match("^[A-Za-z0-9_]+", $nodeDotAttr);
+    string $attr = substitute(($node+"\."), $nodeDotAttr, "" );
+    string $last = match("[A-Za-z0-9_]+\[*[0-9]*\]*$", $nodeDotAttr);
+    string $noIndex = $attr;
+           $noIndex = substitute("\\[[0-9]+\\]", $noIndex, "" );
+    //trace("++ normal index: "+ $noIndex);
+    string $result;
+    string $kids[] = `attributeQuery -node $node -listChildren $noIndex`;
+    int $kidsize = size( $kids );
+    for ( $i=0; $i<$kidsize; $i++ ) {
+        string $cAttr = ($node+"."+$kids[$i]);
+        //trace("  ++ normal index: "+ $node+"."+$kids[$i]);
+        string $type = attrInspectorGetType($node+"."+$kids[$i]);
+        string $val = getFormatedString($type, $cAttr);
+        $val = indentString($val);
+        $kids[$i] = ($kids[$i]+"  ( "+$type+" )\n"+$val);
+    }
+    $result = stringArrayToString( $kids, "\n");
+    return $result;
+}
+
+proc string multiAttr( string $attr )
+{
+    string $token[];
+    tokenize $attr "." $token;
+    string $str = "";
+    int $nKids = `getAttr -size $attr`;
+    for ( $i=0; $i<$nKids; $i++ ) {
+        string $mAttr = ($token[1]+"["+$i+"]");
+        string $type = attrInspectorGetType($token[0]+"."+$mAttr);
+        $str += ($mAttr+"  ( "+$type+" )\n");
+    }
+    return $str;
+}
+
+proc string floatArrayAttr( string $attr )
+{
+    float $val[] = `getAttr $attr`;
+    string $str = "";
+    int $i = 0;
+    for ( $i=0; $i<size($val); $i++ ) {
+        $str += ($i+":  "+$val[$i]+"\n");
+    }
+    return $str;
+}
+
+global proc string getFormatedString( string $type, string $attr )
+{
+    string $txt = "";
+    switch( $type ) {
+        case "bool":
+            if ( `getAttr $attr` ) $txt = "true";
+            else $txt = "false";
+            break;
+        case "string":
+            $txt = ("'"+`getAttr $attr`+"'");
+            break;
+        case "float3":
+        case "double3":
+            float $tmp[3] = `getAttr $attr`;
+            $txt = ($tmp[0]+" "+$tmp[1]+" "+$tmp[2]);
+            break;
+        case "enum":
+            $txt = enumAttr($attr);
+            break;
+        case "matrix":
+            $txt = matrixAttr($attr);
+            break;
+        case "TdataCompound":
+            $txt = compoundAttr($attr);
+            break;
+        case "message":
+            $txt = messageAttr($attr);
+            break;
+        case "multi":
+            $txt = multiAttr($attr);
+            break;
+        case "unknown":
+            $txt = "";
+            break;
+        case "doubleArray":
+            $txt = floatArrayAttr($attr);
+            break;
+        case "stringArray":
+            string $t[] = getAttr($attr);
+            $txt = ("'"+stringArrayToString( $t, "'\n'")+"'");
+            break;
+        case "Int32Array":
+        case "long2":
+            int $ii[] = getAttr($attr);
+            $txt = "";
+            for ( $i in $ii )
+            {
+                //trace $i;
+                $txt += ($i+"\n");
+            }
+            break;
+        default:
+            // print (">>> default case for type : '"+$type+"'\n");
+            $txt = `getAttr $attr`;
+            break;
+    }
+    return $txt;
+}
+
+global proc attrInspectorCB()
+{
+    string $sel[] = `ls -sl`;
+    if ( !gmatch( $sel[0], "*.*") ) return ;
+
+    scrollField -e -clear ai_scf;
+    // print("AI: "+$sel[0]+"\n");
+    string $type = attrInspectorGetType($sel[0]);
+
+    textFieldGrp -e -tx (nodeType($sel[0])) ai_ntype;
+    textFieldGrp -e -tx $sel[0] ai_name;
+    textFieldGrp -e -tx $type ai_type;
+    string $node = plugNode($sel[0]);
+    string $attr = plugAttr($sel[0]);
+    checkBox -e -v (`attributeQuery -n $node -readable $attr`) ai_read;
+    checkBox -e -v (`attributeQuery -n $node -writable $attr`) ai_write;
+    checkBox -e -v (`attributeQuery -n $node -storable $attr`) ai_store;
+    checkBox -e -v (`attributeQuery -n $node -connectable $attr`) ai_connect;
+    checkBox -e -v (`attributeQuery -n $node -keyable $attr`) ai_key;
+    checkBox -e -v (`attributeQuery -n $node -channelBox $attr`) ai_chanbox;
+    checkBox -e -v (`attributeQuery -n $node -hidden $attr`) ai_hidden;
+
+    string $txt = getFormatedString($type,$sel[0]);
+
+    scrollField -e -text $txt ai_scf;
+}
+
+
+global proc attrInspector()
+{
+    if ( `window -ex attrInspectorWin` ) deleteUI attrInspectorWin;
+    window -title "Attribute Inspector" -w 200 -h 80 -tlb true attrInspectorWin;
+
+    string $form = `formLayout`;
+        textFieldGrp -l "node type:" -ed false -cw2 60 100 -adj 2 ai_ntype;
+        textFieldGrp -l "name:" -ed false -cw2 60 100 -adj 2 ai_name;
+        textFieldGrp -l "type:" -ed false -cw2 60 100 -adj 2 ai_type;
+        rowColumnLayout -nc 5 ai_flags;
+            checkBox -l "Readable" -ed 0 ai_read;
+            checkBox -l "Writable" -ed 0 ai_write;
+            checkBox -l "Storable" -ed 0 ai_store;
+            checkBox -l "Connectable" -ed 0 ai_connect;
+            checkBox -l "Keyable" -ed 0 ai_key;
+            checkBox -l "ChannelBox" -ed 0 ai_chanbox;
+            checkBox -l "Hidden" -ed 0 ai_hidden;
+        setParent ..;
+        scrollField -nl 3 ai_scf;
+    setParent ..;
+    formLayout  -e
+                -af ai_ntype top     4
+                -af ai_ntype left    0
+                -af ai_ntype right   0
+                -an ai_ntype bottom
+                -ac ai_name  top     0  ai_ntype
+                -af ai_name  left    0
+                -af ai_name  right   0
+                -an ai_name  bottom
+                -ac ai_type  top     0  ai_name
+                -af ai_type  left    0
+                -af ai_type  right   0
+                -an ai_type  bottom
+                -af ai_flags left   10
+                -ac ai_flags top    0   ai_type
+                -af ai_flags right  10
+                -an ai_flags bottom
+                -ac ai_scf  top     4   ai_flags
+                -af ai_scf  left    0
+                -af ai_scf  right   0
+                -af ai_scf  bottom  0
+                $form;
+
+    showWindow attrInspectorWin;
+
+    scriptJob -parent attrInspectorWin -event "SelectionChanged" "attrInspectorCB()";
+}
+
